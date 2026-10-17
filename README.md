@@ -1,6 +1,6 @@
 # 🎈 Ilmapallojahti VR
 
-Yksinkertainen selaimessa toimiva 3D-peli: ilmapalloja ilmestyy satunnaisesti ympärillesi, ja ne puhkaistaan katsomalla niitä ja painamalla peliohjaimen nappia. Tehty pelattavaksi Android-puhelimella VR-laseissa (Cardboard-tyyppiset lasit).
+Yksinkertainen selaimessa toimiva 3D-peli: ilmapalloja ilmestyy satunnaisesti ympärillesi, ja niitä puhkotaan heittämällä tikkoja katseen suuntaan peliohjaimen napilla. Tehty pelattavaksi Android-puhelimella VR-laseissa (Cardboard-tyyppiset lasit).
 
 **Pelaa:** https://willizilliw.github.io/ilmapallojahti-vr/
 
@@ -18,11 +18,11 @@ Jos selain tukee WebXR:ää, valikossa näkyy myös **WebXR VR-tila** -nappi.
 | Toiminto | Peliohjain | Muut |
 |---|---|---|
 | Tähtää | katse (pään liike) | hiirellä vetämällä tietokoneella |
-| Puhkaise / aloita | A, B, X, olkanapit, liipaisimet | näytön napautus, välilyönti |
+| Heitä tikka / aloita | A, B, X, olkanapit, liipaisimet | näytön napautus, välilyönti |
 | Käänny | tatti vasen–oikea, ristiohjain vasen/oikea (45°) | nuolinäppäimet |
 | Keskitä näkymä | Y tai Select/Back | R |
 
-Kultainen pallo antaa 5 pistettä. Kierros kestää 60 sekuntia, ja ennätys tallentuu selaimeen.
+Sinulla on 100 tikkaa. Jokainen painallus heittää tikan, osui se tai ei. Tähtäin muuttuu punaiseksi, kun pallo on kohdalla. Kultainen pallo antaa 5 pistettä. Kierros päättyy 60 sekunnin jälkeen tai kun tikat loppuvat, ja ennätys tallentuu selaimeen.
 
 ## Tekniikka
 
