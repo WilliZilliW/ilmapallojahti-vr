@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1b2a4a">
+<title>Ilmapallojahti VR</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b2a4a; font-family: system-ui, sans-serif; }
+  canvas { display: block; touch-action: none; }
+  #menu {
+    position: fixed; inset: 0; z-index: 10; overflow-y: auto;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px 16px; box-sizing: border-box; text-align: center; color: #fff;
+    background: rgba(20, 30, 60, 0.72);
+  }
+  #menu[hidden] { display: none; }
+  h1 { margin: 0 0 8px; font-size: 2rem; }
+  p { max-width: 520px; line-height: 1.45; margin: 6px 0; }
+  .buttons { display: flex; flex-direction: column; gap: 12px; margin: 18px 0; width: min(340px, 100%); }
+  button.big {
+    font-size: 1.15rem; padding: 14px 18px; border: 0; border-radius: 12px; cursor: pointer;
+    background: #ff5a5f; color: #fff; font-weight: 600; box-shadow: 0 4px 0 #b83b3f;
+  }
+  button.big.alt { background: #3fa7ff; box-shadow: 0 4px 0 #2a72b0; }
+  button.big.ghost { background: #ffffff22; box-shadow: none; }
+  #gpStatus { font-size: 0.95rem; opacity: 0.9; margin-top: 4px; }
+  details { max-width: 520px; text-align: left; margin-top: 14px; background: #ffffff14; border-radius: 10px; padding: 10px 14px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details li { margin: 4px 0; }
+  #exitBtn {
+    position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5;
+    width: 40px; height: 40px; border-radius: 50%; border: 0; font-size: 18px;
+    background: #00000066; color: #fff; cursor: pointer;
+  }
+  #exitBtn[hidden] { display: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="menu">
+  <h1>🎈 Ilmapallojahti VR</h1>
+  <p>Ilmapalloja ilmestyy satunnaisesti ympärillesi. Käännä päätäsi, tähtää keskellä näkyvällä tähtäimellä ja puhkaise pallot ennen kuin ne karkaavat taivaalle!</p>
+  <p>Kultainen pallo = 5 pistettä. Kierros kestää 60 sekuntia.</p>
+  <div class="buttons">
+    <button class="big" id="btnCardboard">🥽 VR-lasit (Cardboard)</button>
+    <button class="big alt" id="btnXR" hidden>WebXR VR-tila</button>
+    <button class="big ghost" id="btnMono">📱 Pelaa näytöllä</button>
+  </div>
+  <div id="gpStatus">🎮 Peliohjainta ei havaittu – paina jotain ohjaimen nappia.</div>
+  <details>
+    <summary>Ohjaimet</summary>
+    <ul>
+      <li><b>Tähtää</b>: katso palloa (puhelimen asentoanturi / VR-lasit)</li>
+      <li><b>Puhkaise</b>: A / B / X, olkanapit, liipaisimet, näytön napautus tai välilyönti</li>
+      <li><b>Käänny</b>: tatti vasen–oikea tai ristiohjain vasen/oikea (45°)</li>
+      <li><b>Keskitä näkymä</b>: Y tai Select/Back (näppäimistö: R)</li>
+      <li><b>Aloita</b>: Start tai mikä tahansa puhkaisunappi</li>
+      <li>Tietokoneella: vedä hiirellä katsoaksesi, klikkaa puhkaistaksesi</li>
+    </ul>
+  </details>
+</div>
+<button id="exitBtn" hidden aria-label="Poistu">✕</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
+
+const GAME_TIME = 60;
+const EYE_HEIGHT = 1.6;
+const MAX_BALLOONS = 14;
+const DEG = Math.PI / 180;
+
+// ---------- Renderer, scene, camera ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local');
+document.body.appendChild(renderer.domElement);
+
+const stereo = new StereoEffect(renderer);
+stereo.setEyeSeparation(0.064);
+stereo.setSize(innerWidth, innerHeight);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xcfe8ff, 35, 110);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 300);
+const rig = new THREE.Group();
+rig.position.y = EYE_HEIGHT;
+rig.add(camera);
+scene.add(rig);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x88aa66, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+sun.position.set(5, 10, 3);
+scene.add(sun);
+
+// ---------- Environment ----------
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(200, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { top: { value: new THREE.Color(0x2f6fd0) }, bottom: { value: new THREE.Color(0xcfe8ff) } },
+    vertexShader: `varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform vec3 top; uniform vec3 bottom; varying vec3 vP;
+      void main(){ float h = clamp(vP.y * 1.6 + 0.05, 0.0, 1.0); gl_FragColor = vec4(mix(bottom, top, h), 1.0);
+      #include <colorspace_fragment>
+      }`
+  })
+);
+scene.add(sky);
+
+const ground = new THREE.Mesh(new THREE.CircleGeometry(150, 48), new THREE.MeshLambertMaterial({ color: 0x6fbf4a }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+const trunkGeo = new THREE.CylinderGeometry(0.15, 0.2, 1.2, 6);
+const crownGeo = new THREE.ConeGeometry(1.1, 2.6, 7);
+const trunkMat = new THREE.MeshLambertMaterial({ color: 0x7a5230 });
+const crownMat = new THREE.MeshLambertMaterial({ color: 0x2e8b3d });
+for (let i = 0; i < 45; i++) {
+  const a = Math.random() * Math.PI * 2, d = 18 + Math.random() * 35, s = 0.8 + Math.random() * 1.2;
+  const tree = new THREE.Group();
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.position.y = 0.6;
+  const crown = new THREE.Mesh(crownGeo, crownMat); crown.position.y = 2.4;
+  tree.add(trunk, crown);
+  tree.position.set(Math.sin(a) * d, 0, Math.cos(a) * d);
+  tree.scale.setScalar(s);
+  scene.add(tree);
+}
+
+const cloudGeo = new THREE.SphereGeometry(1, 12, 8);
+const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, fog: false, emissive: 0x666666 });
+for (let i = 0; i < 14; i++) {
+  const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 60;
+  const cloud = new THREE.Group();
+  const n = 3 + Math.floor(Math.random() * 3);
+  for (let j = 0; j < n; j++) {
+    const puff = new THREE.Mesh(cloudGeo, cloudMat);
+    puff.position.set((j - n / 2) * 2.2, Math.random() * 1.2, Math.random() * 1.5);
+    puff.scale.setScalar(2 + Math.random() * 1.5);
+    cloud.add(puff);
+  }
+  cloud.position.set(Math.sin(a) * d, 22 + Math.random() * 18, Math.cos(a) * d);
+  cloud.lookAt(0, cloud.position.y, 0);
+  scene.add(cloud);
+}
+
+// ---------- Head-locked HUD (works in stereo + WebXR) ----------
+function makePanel(w, h, cw, ch) {
+  const canvas = document.createElement('canvas');
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+  mesh.renderOrder = 999;
+  return { mesh, ctx, tex, canvas };
+}
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+const hud = makePanel(1.3, 0.24, 650, 120);
+hud.mesh.position.set(0, -0.62, -2.2);
+camera.add(hud.mesh);
+
+const msg = makePanel(2.2, 1.3, 880, 520);
+msg.mesh.position.set(0, 0.15, -2.8);
+camera.add(msg.mesh);
+
+const reticle = new THREE.Mesh(
+  new THREE.RingGeometry(0.009, 0.015, 32),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, fog: false })
+);
+reticle.renderOrder = 1000;
+camera.add(reticle);
+
+let hudKey = '';
+function drawHud() {
+  const t = Math.max(0, Math.ceil(timeLeft));
+  const key = `${score}|${t}|${missed}|${toast}`;
+  if (key === hudKey) return;
+  hudKey = key;
+  const { ctx, canvas, tex } = hud;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  roundRect(ctx, 4, 4, canvas.width - 8, canvas.height - 8, 30); ctx.fill();
+  ctx.textBaseline = 'middle'; ctx.font = 'bold 52px system-ui, sans-serif';
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+  ctx.fillText(`🎈 ${score}`, 34, 62);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = t <= 10 ? '#ff6b6b' : '#fff';
+  ctx.fillText(`⏱ ${t}`, canvas.width / 2, 62);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#ffd36b';
+  ctx.fillText(toast || `ohi ${missed}`, canvas.width - 34, 62);
+  tex.needsUpdate = true;
+}
+
+function drawMessage(title, lines) {
+  const { ctx, canvas, tex } = msg;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(15,25,55,0.78)';
+  roundRect(ctx, 6, 6, canvas.width - 12, canvas.height - 12, 40); ctx.fill();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 72px system-ui, sans-serif';
+  ctx.fillText(title, canvas.width / 2, 90);
+  ctx.font = '42px system-ui, sans-serif';
+  lines.forEach((l, i) => {
+    ctx.fillStyle = i === lines.length - 1 ? '#ffd36b' : '#e8eeff';
+    ctx.fillText(l, canvas.width / 2, 190 + i * 66);
+  });
+  tex.needsUpdate = true;
+}
+
+// ---------- Audio ----------
+let actx = null, noiseBuf = null;
+function initAudio() {
+  if (!actx) {
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.25, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    } catch { actx = null; }
+  }
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+function tone(freq, dur, { type = 'sine', vol = 0.15, delay = 0, slide = null } = {}) {
+  if (!actx) return;
+  const t = actx.currentTime + delay;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function playPop(gold) {
+  if (!actx) return;
+  const t = actx.currentTime;
+  const src = actx.createBufferSource(); src.buffer = noiseBuf;
+  const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900 + Math.random() * 900; f.Q.value = 0.8;
+  const g = actx.createGain(); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+  src.connect(f).connect(g).connect(actx.destination); src.start(t); src.stop(t + 0.2);
+  if (gold) { tone(1046, 0.25, { vol: 0.12 }); tone(1568, 0.35, { vol: 0.1, delay: 0.08 }); }
+}
+
+// ---------- Balloons ----------
+const COLORS = [0xff3b3b, 0xff9f1c, 0xffe14d, 0x3ddc84, 0x3fa7ff, 0xb26bff, 0xff5fb8];
+const balloonGeo = new THREE.SphereGeometry(0.35, 24, 18);
+const knotGeo = new THREE.ConeGeometry(0.06, 0.1, 10);
+const stringMat = new THREE.LineBasicMaterial({ color: 0xf2f2f2 });
+const stringGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0, -0.52, 0), new THREE.Vector3(0.05, -0.9, 0), new THREE.Vector3(-0.03, -1.3, 0), new THREE.Vector3(0.02, -1.6, 0)
+]);
+const balloons = [];
+
+function spawnBalloon(gold = false) {
+  const color = gold ? 0xffc800 : COLORS[Math.floor(Math.random() * COLORS.length)];
+  const mat = new THREE.MeshPhongMaterial({ color, shininess: 90, specular: 0x777777, emissive: gold ? 0x442200 : 0x000000 });
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(balloonGeo, mat); body.scale.set(1, 1.2, 1);
+  const knot = new THREE.Mesh(knotGeo, mat); knot.position.y = -0.47;
+  g.add(body, knot, new THREE.Line(stringGeo, stringMat));
+  const size = gold ? 0.7 : 0.85 + Math.random() * 0.3;
+  const a = Math.random() * Math.PI * 2, d = 4 + Math.random() * 7;
+  g.position.set(Math.sin(a) * d, 0.6 + Math.random() * 2.4, Math.cos(a) * d);
+  g.scale.setScalar(0.01);
+  g.userData = {
+    mat, gold, size, radius: 0.42 * size, age: 0,
+    baseEmissive: mat.emissive.getHex(),
+    speed: gold ? 1.0 + Math.random() * 0.6 : 0.3 + Math.random() * 0.45,
+    phase: Math.random() * Math.PI * 2, baseX: g.position.x, baseZ: g.position.z
+  };
+  scene.add(g);
+  balloons.push(g);
+}
+
+function removeBalloon(b) {
+  scene.remove(b);
+  b.userData.mat.dispose();
+  balloons.splice(balloons.indexOf(b), 1);
+  if (target === b) target = null;
+}
+
+function updateBalloons(dt) {
+  for (let i = balloons.length - 1; i >= 0; i--) {
+    const b = balloons[i], u = b.userData;
+    u.age += dt;
+    b.scale.setScalar(u.size * Math.min(1, u.age / 0.35));
+    b.position.y += u.speed * dt;
+    const w = u.age * (u.gold ? 2.2 : 0.9) + u.phase;
+    b.position.x = u.baseX + Math.sin(w) * (u.gold ? 0.6 : 0.25);
+    b.position.z = u.baseZ + Math.cos(w * 0.7) * 0.15;
+    b.rotation.z = Math.sin(w) * 0.12;
+    if (b.position.y > 10) {
+      removeBalloon(b);
+      if (state === 'playing') missed++;
+    }
+  }
+}
+
+// ---------- Particles ----------
+const particles = [];
+function burst(pos, color) {
+  const n = 28, p = new Float32Array(n * 3), v = [];
+  for (let i = 0; i < n; i++) {
+    p.set([pos.x, pos.y, pos.z], i * 3);
+    v.push(new THREE.Vector3().randomDirection().multiplyScalar(1.5 + Math.random() * 2.5));
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color, size: 0.09, transparent: true, depthWrite: false }));
+  scene.add(pts);
+  particles.push({ pts, v, life: 0.9 });
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const P = particles[i];
+    P.life -= dt;
+    const arr = P.pts.geometry.attributes.position.array;
+    P.v.forEach((v, j) => {
+      v.y -= 4 * dt; v.multiplyScalar(1 - 1.8 * dt);
+      arr[j * 3] += v.x * dt; arr[j * 3 + 1] += v.y * dt; arr[j * 3 + 2] += v.z * dt;
+    });
+    P.pts.geometry.attributes.position.needsUpdate = true;
+    P.pts.material.opacity = Math.max(0, P.life / 0.9);
+    if (P.life <= 0) {
+      scene.remove(P.pts); P.pts.geometry.dispose(); P.pts.material.dispose();
+      particles.splice(i, 1);
+    }
+  }
+}
+
+// ---------- Aiming ----------
+let target = null;
+const camPos = new THREE.Vector3(), camDir = new THREE.Vector3(), tmp = new THREE.Vector3();
+function updateAim() {
+  camera.getWorldPosition(camPos);
+  camera.getWorldDirection(camDir);
+  let best = null, bestRatio = 1, bestDist = 6;
+  for (const b of balloons) {
+    tmp.copy(b.position).sub(camPos);
+    const d = tmp.length();
+    const ratio = camDir.angleTo(tmp) / (Math.atan(b.userData.radius * 1.3 / d) + 0.015);
+    if (ratio < bestRatio) { bestRatio = ratio; best = b; bestDist = d; }
+  }
+  if (target !== best) {
+    if (target) target.userData.mat.emissive.setHex(target.userData.baseEmissive);
+    if (best) best.userData.mat.emissive.setHex(0x444444);
+    target = best;
+  }
+  // Place reticle at target depth so it stays comfortable in stereo.
+  const rd = best ? Math.max(1, bestDist - best.userData.radius) : 6;
+  reticle.position.set(0, 0, -rd);
+  reticle.scale.setScalar(rd * (best ? 1.4 : 1));
+  reticle.material.color.setHex(best ? 0xff4d4d : 0xffffff);
+}
+
+// ---------- Game state ----------
+let state = 'idle'; // idle | menu | playing | over
+let mode = null;    // null | cardboard | mono | xr
+let score = 0, missed = 0, shots = 0, hits = 0, timeLeft = 0, elapsed = 0, spawnTimer = 0, overAt = 0, lastTick = 0;
+let toast = '', toastTime = 0;
+let best = +(safeGet('ilmapallo-ennatys') || 0);
+
+function safeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function safeSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+
+function setState(s) {
+  state = s;
+  msg.mesh.visible = s === 'menu' || s === 'over';
+  hud.mesh.visible = s === 'playing';
+  reticle.visible = s !== 'idle';
+  if (s === 'menu') drawMessage('Ilmapallojahti', [
+    'Katso palloa ja paina ohjaimen nappia', '(tai napauta näyttöä) puhkaistaksesi.',
+    `Ennätys: ${best}`, 'Paina A / napauta aloittaaksesi'
+  ]);
+}
+
+function startGame() {
+  while (balloons.length) removeBalloon(balloons[0]);
+  score = missed = shots = hits = 0;
+  timeLeft = GAME_TIME; elapsed = 0; spawnTimer = 0.3; lastTick = 0; hudKey = '';
+  setState('playing');
+  tone(523, 0.12, { vol: 0.12 }); tone(784, 0.18, { vol: 0.12, delay: 0.12 });
+}
+
+function endGame() {
+  overAt = performance.now();
+  const record = score > best;
+  if (record) { best = score; safeSet('ilmapallo-ennatys', String(best)); }
+  const acc = shots ? Math.round(hits / shots * 100) : 0;
+  setState('over');
+  drawMessage(record ? 'Uusi ennätys! 🏆' : 'Aika loppui!', [
+    `Pisteet: ${score}`, `Osumatarkkuus: ${acc} %   ·   Karkasi: ${missed}`,
+    `Ennätys: ${best}`, 'Paina A / napauta pelataksesi uudelleen'
+  ]);
+  [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.25, { vol: 0.1, delay: i * 0.1 }));
+}
+
+function fire() {
+  initAudio();
+  if (state === 'menu' || (state === 'over' && performance.now() - overAt > 1200)) { startGame(); return; }
+  if (state !== 'playing') return;
+  shots++;
+  if (!target) { tone(220, 0.06, { type: 'triangle', vol: 0.05 }); return; }
+  const b = target, u = b.userData;
+  hits++;
+  const pts = u.gold ? 5 : 1;
+  score += pts;
+  if (u.gold) { toast = '+5 ⭐'; toastTime = 1.2; }
+  burst(b.position, u.mat.color);
+  playPop(u.gold);
+  vibrate(u.gold ? 160 : 70);
+  removeBalloon(b);
+}
+
+function updateGame(dt) {
+  if (toastTime > 0 && (toastTime -= dt) <= 0) toast = '';
+  if (state === 'playing') {
+    timeLeft -= dt; elapsed += dt;
+    const secs = Math.ceil(timeLeft);
+    if (secs <= 10 && secs > 0 && secs !== lastTick) { lastTick = secs; tone(880, 0.05, { type: 'square', vol: 0.04 }); }
+    if (timeLeft <= 0) { endGame(); return; }
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      if (balloons.length < MAX_BALLOONS) spawnBalloon(Math.random() < 0.1);
+      spawnTimer = Math.max(0.4, 1.3 - elapsed * 0.014) * (0.6 + Math.random() * 0.8);
+    }
+    drawHud();
+  } else if (state !== 'playing') {
+    // Decorative balloons in menus.
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) { if (balloons.length < 6) spawnBalloon(Math.random() < 0.1); spawnTimer = 1.5; }
+  }
+}
+
+// ---------- Gamepad ----------
+const prevButtons = new Map();
+let lastPad = null;
+const gpStatus = document.getElementById('gpStatus');
+
+function updatePadStatus() {
+  const pads = [...(navigator.getGamepads ? navigator.getGamepads() : [])].filter(Boolean);
+  gpStatus.textContent = pads.length
+    ? `🎮 Ohjain yhdistetty: ${pads[0].id.replace(/\(.*?\)/g, '').trim().slice(0, 40)}`
+    : '🎮 Peliohjainta ei havaittu – paina jotain ohjaimen nappia.';
+}
+addEventListener('gamepadconnected', () => { updatePadStatus(); toast = '🎮 OK'; toastTime = 1.5; });
+addEventListener('gamepaddisconnected', updatePadStatus);
+
+function vibrate(ms) {
+  const va = lastPad && lastPad.vibrationActuator;
+  if (va && va.playEffect) va.playEffect('dual-rumble', { duration: ms, strongMagnitude: 0.6, weakMagnitude: 0.4 }).catch(() => {});
+}
+
+function onPadButton(i) {
+  if (!mode) {
+    // Allow starting Cardboard mode is not possible without a user gesture (fullscreen), so just update status.
+    updatePadStatus(); return;
+  }
+  if (i === 3 || i === 8) recenter();
+  else if (i === 14) snapTurn(1);
+  else if (i === 15) snapTurn(-1);
+  else if (i === 9) { if (state !== 'playing') fire(); }
+  else fire();
+}
+
+function pollGamepads(dt) {
+  if (!navigator.getGamepads) return;
+  let turn = 0;
+  for (const gp of navigator.getGamepads()) {
+    if (!gp) continue;
+    const prev = prevButtons.get(gp.index) || [];
+    gp.buttons.forEach((b, i) => {
+      const pressed = b.pressed || b.value > 0.5;
+      if (pressed && !prev[i]) { lastPad = gp; onPadButton(i); }
+      prev[i] = pressed;
+    });
+    prevButtons.set(gp.index, prev);
+    // Standard mapping: right stick (axes 2) or left stick (axes 0). Non-standard: only axes 0.
+    const ax = gp.axes;
+    if (gp.mapping === 'standard' && ax.length > 2 && Math.abs(ax[2]) > 0.3) turn += ax[2];
+    else if (ax.length > 0 && Math.abs(ax[0]) > 0.3) turn += ax[0];
+  }
+  if (mode && turn) rig.rotation.y -= turn * 1.8 * dt;
+}
+
+function snapTurn(dir) { rig.rotation.y += dir * Math.PI / 4; }
+
+function recenter() {
+  const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+  rig.rotation.y = -e.y;
+  if (mode !== 'xr' && !gyro) { yaw = 0; rig.rotation.y = 0; }
+}
+
+// ---------- Device orientation & mouse look ----------
+let gyro = null;
+addEventListener('deviceorientation', (e) => { if (e.alpha != null) gyro = e; });
+const zee = new THREE.Vector3(0, 0, 1);
+const qTilt = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+const qScreen = new THREE.Quaternion();
+const eul = new THREE.Euler();
+function applyGyro(q) {
+  const orient = ((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0) * DEG;
+  eul.set(gyro.beta * DEG, gyro.alpha * DEG, -gyro.gamma * DEG, 'YXZ');
+  q.setFromEuler(eul).multiply(qTilt).multiply(qScreen.setFromAxisAngle(zee, -orient));
+}
+
+let yaw = 0, pitch = 0, dragging = false, downX = 0, downY = 0, lastX = 0, lastY = 0, moved = 0;
+const canvas = renderer.domElement;
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true; moved = 0; downX = lastX = e.clientX; downY = lastY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  moved = Math.max(moved, Math.hypot(e.clientX - downX, e.clientY - downY));
+  if (!gyro) {
+    yaw -= (e.clientX - lastX) * 0.004;
+    pitch = THREE.MathUtils.clamp(pitch - (e.clientY - lastY) * 0.004, -1.4, 1.4);
+  }
+  lastX = e.clientX; lastY = e.clientY;
+});
+canvas.addEventListener('pointerup', () => {
+  if (dragging && moved < 8 && mode) fire();
+  dragging = false;
+});
+
+addEventListener('keydown', (e) => {
+  if (!mode) return;
+  if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); fire(); }
+  else if (e.code === 'KeyR') recenter();
+  else if (e.code === 'ArrowLeft') snapTurn(1);
+  else if (e.code === 'ArrowRight') snapTurn(-1);
+  else if (e.code === 'Escape') exitMode();
+});
+
+// ---------- Modes ----------
+const menuEl = document.getElementById('menu');
+const exitBtn = document.getElementById('exitBtn');
+const btnXR = document.getElementById('btnXR');
+let wakeLock = null;
+
+async function requestWake() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (mode && document.visibilityState === 'visible') requestWake(); });
+
+async function askOrientationPermission() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
+    try { await DeviceOrientationEvent.requestPermission(); } catch {}
+  }
+}
+
+async function enterScreenMode(m) {
+  initAudio();
+  await askOrientationPermission();
+  if (m === 'cardboard') {
+    try { await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch {}
+    try { await screen.orientation.lock('landscape'); } catch {}
+  }
+  requestWake();
+  mode = m;
+  camera.fov = m === 'cardboard' ? 85 : 70;
+  onResize();
+  menuEl.hidden = true;
+  exitBtn.hidden = false;
+  setState('menu');
+}
+
+async function enterXR() {
+  initAudio();
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
+    session.addEventListener('select', fire);
+    session.addEventListener('end', () => { if (mode === 'xr') exitMode(); });
+    await renderer.xr.setSession(session);
+    mode = 'xr';
+    menuEl.hidden = true;
+    setState('menu');
+  } catch (err) {
+    alert('WebXR-tilan käynnistys epäonnistui: ' + err.message + '\nKokeile Cardboard-tilaa.');
+  }
+}
+
+function exitMode() {
+  const was = mode;
+  mode = null;
+  if (was === 'xr') renderer.xr.getSession()?.end();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  try { screen.orientation.unlock(); } catch {}
+  wakeLock?.release?.().catch(() => {}); wakeLock = null;
+  exitBtn.hidden = true;
+  menuEl.hidden = false;
+  camera.fov = 70;
+  setState('idle');
+  updatePadStatus();
+  onResize();
+}
+
+document.getElementById('btnCardboard').onclick = () => enterScreenMode('cardboard');
+document.getElementById('btnMono').onclick = () => enterScreenMode('mono');
+btnXR.onclick = enterXR;
+exitBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+exitBtn.onclick = exitMode;
+let wasFullscreen = false;
+document.addEventListener('fullscreenchange', () => {
+  // Leaving fullscreen (e.g. Android back gesture) returns to the menu.
+  if (document.fullscreenElement) wasFullscreen = true;
+  else if (wasFullscreen && mode === 'cardboard') { wasFullscreen = false; exitMode(); }
+});
+
+if (navigator.xr && navigator.xr.isSessionSupported) {
+  navigator.xr.isSessionSupported('immersive-vr').then((ok) => { btnXR.hidden = !ok; }).catch(() => {});
+}
+
+function onResize() {
+  if (renderer.xr.isPresenting) return;
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  stereo.setSize(innerWidth, innerHeight);
+}
+addEventListener('resize', onResize);
+
+// Debug handle for testing from the browser console.
+window.peli = { balloons, camera, fire, get score() { return score; }, get state() { return state; } };
+
+// ---------- Main loop ----------
+const clock = new THREE.Clock();
+setState('idle');
+updatePadStatus();
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  pollGamepads(dt);
+
+  if (!renderer.xr.isPresenting) {
+    if (!mode) { yaw += dt * 0.05; camera.quaternion.setFromEuler(eul.set(0.15, yaw, 0, 'YXZ')); }
+    else if (gyro) applyGyro(camera.quaternion);
+    else camera.quaternion.setFromEuler(eul.set(pitch, yaw, 0, 'YXZ'));
+  }
+
+  updateGame(dt);
+  updateBalloons(dt);
+  updateParticles(dt);
+  rig.updateMatrixWorld(true);
+  updateAim();
+
+  if (mode === 'cardboard' && !renderer.xr.isPresenting) stereo.render(scene, camera);
+  else renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
